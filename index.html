@@ -448,7 +448,26 @@
     wins: 0,
     currentStreak: 0,
     maxStreak: 0,
-    distribution: [0, 0, 0, 0, 0, 0]
+    distribution: [0, 0, 0, 0, 0, 0],
+    averageTimePerGame: 0,
+    totalPlayTime: 0,
+    lastPlayTimestamp: 0,
+    engagementScore: 0,
+    difficultyLevel: 1,
+    wordDifficulty: {}
+  };
+
+  const ADAPTIVE_CONFIG = {
+    minEngagementThreshold: 0.6,
+    maxEngagementThreshold: 0.9,
+    difficultyAdjustmentRate: 0.1,
+    rewardMultiplier: 1.0,
+    baseRewardTime: 1000,
+    wordDifficultyWeights: {
+      commonLetters: 0.3,
+      wordLength: 0.2,
+      wordFrequency: 0.5
+    }
   };
 
   let secretWord = "";
@@ -468,11 +487,65 @@
   const statCurrentStreak = document.getElementById("stat-current-streak");
   const statMaxStreak = document.getElementById("stat-max-streak");
 
+  function calculateWordDifficulty(word) {
+    const commonLetters = ['e', 't', 'a', 'o', 'i', 'n', 's', 'h', 'r', 'd'];
+    let score = 0;
+    
+    for (let letter of word) {
+      if (commonLetters.includes(letter)) {
+        score += ADAPTIVE_CONFIG.wordDifficultyWeights.commonLetters;
+      }
+    }
+    
+    return Math.min(5, Math.max(1, Math.ceil(score * 2)));
+  }
+
+  function updateEngagementMetrics() {
+    const currentTime = Date.now();
+    if (stats.lastPlayTimestamp > 0) {
+      const timeSinceLastPlay = currentTime - stats.lastPlayTimestamp;
+      stats.totalPlayTime += timeSinceLastPlay;
+      stats.averageTimePerGame = stats.totalPlayTime / stats.played;
+      
+      const timeScore = Math.min(1, timeSinceLastPlay / (5 * 60 * 1000));
+      const streakScore = stats.currentStreak / 10;
+      const winRateScore = stats.wins / Math.max(1, stats.played);
+      
+      stats.engagementScore = (timeScore + streakScore + winRateScore) / 3;
+    }
+    stats.lastPlayTimestamp = currentTime;
+  }
+
+  function adjustDifficulty() {
+    if (stats.engagementScore < ADAPTIVE_CONFIG.minEngagementThreshold) {
+      stats.difficultyLevel = Math.max(1, stats.difficultyLevel - ADAPTIVE_CONFIG.difficultyAdjustmentRate);
+    } else if (stats.engagementScore > ADAPTIVE_CONFIG.maxEngagementThreshold) {
+      stats.difficultyLevel = Math.min(5, stats.difficultyLevel + ADAPTIVE_CONFIG.difficultyAdjustmentRate);
+    }
+    
+    ADAPTIVE_CONFIG.rewardMultiplier = 1 + (stats.engagementScore - 0.5) * 0.5;
+  }
+
   function initGame() {
     const savedStats = localStorage.getItem('wordleStats');
-    if (savedStats) stats = JSON.parse(savedStats);
+    if (savedStats) {
+      stats = JSON.parse(savedStats);
+      stats.averageTimePerGame = stats.averageTimePerGame || 0;
+      stats.totalPlayTime = stats.totalPlayTime || 0;
+      stats.lastPlayTimestamp = stats.lastPlayTimestamp || 0;
+      stats.engagementScore = stats.engagementScore || 0;
+      stats.difficultyLevel = stats.difficultyLevel || 1;
+      stats.wordDifficulty = stats.wordDifficulty || {};
+    }
 
-    secretWord = DEFAULT_WORDS[Math.floor(Math.random() * DEFAULT_WORDS.length)];
+    const availableWords = DEFAULT_WORDS.filter(word => {
+      const difficulty = stats.wordDifficulty[word] || calculateWordDifficulty(word);
+      return Math.abs(difficulty - stats.difficultyLevel) <= 1;
+    });
+    
+    secretWord = availableWords[Math.floor(Math.random() * availableWords.length)];
+    stats.wordDifficulty[secretWord] = calculateWordDifficulty(secretWord);
+
     currentGuess = "";
     currentRow = 0;
     gameOver = false;
@@ -497,7 +570,6 @@
     });
     document.addEventListener('keydown', handlePhysicalKeyPress);
 
-    // Add loading screen fade out
     setTimeout(() => {
       const loadingScreen = document.getElementById('loading-screen');
       loadingScreen.classList.add('fade-out');
@@ -565,11 +637,15 @@
     }
 
     if (currentGuess === secretWord) {
+      updateEngagementMetrics();
+      adjustDifficulty();
       endGame(true);
     } else {
       currentRow++;
       currentGuess = "";
       if (currentRow === 6) {
+        updateEngagementMetrics();
+        adjustDifficulty();
         endGame(false);
       }
     }
@@ -590,14 +666,18 @@
     }
 
     localStorage.setItem('wordleStats', JSON.stringify(stats));
-    statPlayed.textContent = stats.played;
-    statWinRate.textContent = Math.round((stats.wins / stats.played) * 100) + "%";
-    statCurrentStreak.textContent = stats.currentStreak;
-    statMaxStreak.textContent = stats.maxStreak;
 
-    resultTitle.textContent = win ? "You Win!" : "Game Over";
-    resultWord.textContent = secretWord.toUpperCase();
-    resultModal.classList.add("show");
+    const rewardDelay = ADAPTIVE_CONFIG.baseRewardTime * ADAPTIVE_CONFIG.rewardMultiplier;
+    setTimeout(() => {
+      statPlayed.textContent = stats.played;
+      statWinRate.textContent = Math.round((stats.wins / stats.played) * 100) + "%";
+      statCurrentStreak.textContent = stats.currentStreak;
+      statMaxStreak.textContent = stats.maxStreak;
+
+      resultTitle.textContent = win ? "You Win!" : "Game Over";
+      resultWord.textContent = secretWord.toUpperCase();
+      resultModal.classList.add("show");
+    }, rewardDelay);
   }
 
   function showMessage(msg) {
